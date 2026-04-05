@@ -1,0 +1,12 @@
+{
+  "zoom workplace pro|ai meeting summaries": {
+    "pro_confidence": 0.9,
+    "anti_confidence": 0.85,
+    "composite_score": 0.55,
+    "bundle_type": "Always",
+    "summary": "AI meeting summaries in Zoom Workplace Pro significantly boost productivity by automating note-taking, summarizing key points, and tracking action items, leading to more efficient meetings and improved information retention. However, users should be aware of potential limitations regarding accuracy, contextual understanding, legal compliance, and privacy, especially for formal or sensitive discussions."
+  },
+  "amazon prime|add free streaming ": {
+    "summary": "Amazon is increasing the price for its ad-free Prime Video tier by an additional $5 per month in the U.S., on top of the existing Prime membership. This change follows the introduction of ads on the streaming platform in 2024."
+  }
+}
