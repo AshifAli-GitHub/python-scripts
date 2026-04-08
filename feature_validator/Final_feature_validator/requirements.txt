@@ -1,0 +1,11 @@
+
+
+streamlit==1.27.0
+langgraph==0.2.3
+groq==0.2.0
+tavily==0.1.0
+python-dotenv==1.0.0
+beautifulsoup4==4.12.2
+requests==2.31.0
+langfuse==0.6.0
+typing-extensions==4.7.1
