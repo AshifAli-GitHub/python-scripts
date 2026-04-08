@@ -2,7 +2,7 @@
 
 import streamlit as st
 import json
-from backend import run_graph
+from BE_feature_validator_v3 import run_graph
 
 st.set_page_config(page_title="Feature Validator", layout="wide")
 

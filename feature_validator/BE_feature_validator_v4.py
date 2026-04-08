@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from typing import TypedDict, List, Dict, Annotated
 
-from google import genai
+from groq import Groq
 from langgraph.graph import StateGraph, END, START
 from tavily import TavilyClient
 
@@ -21,7 +21,7 @@ load_dotenv()
 
 CACHE_FILE = "cache.json"
 
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
@@ -46,6 +46,7 @@ class State(TypedDict):
 
     cache_hit: bool
     cache_key: str
+    cache_mode: str 
 
     pro_queries: List[str]
     anti_queries: List[str]
@@ -63,24 +64,54 @@ class State(TypedDict):
 # =========================
 # UTILS
 # =========================
+
 def call_llm(prompt: str):
-    res = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config={"temperature": 0}
+    res = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        response_format={"type": "json_object"}  # 🔥 critical fix
     )
-    return res.text
+    return res.choices[0].message.content
 
 
+def call_llm_stream(prompt: str):
+    stream = groq_client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0,
+        stream=True
+    )
+
+    for chunk in stream:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+
+
+# =========================
+# SAFE JSON PARSER (FIXED)
+# =========================
 def safe_json_parse(text):
     try:
         return json.loads(text)
     except:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return {}
+        pass
 
+    matches = re.findall(r"\{.*?\}", text, re.DOTALL)
+
+    for m in matches:
+        try:
+            return json.loads(m)
+        except:
+            continue
+
+    return {
+        "summary": "Failed to parse JSON",
+        "raw_output": text[:500]
+    }
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -95,11 +126,66 @@ def save_cache(cache):
 # =========================
 # NODES
 # =========================
+# def check_cache(state: State):
+#     start = time.time()
+#     cache = load_cache()
+#     key = f"{state['offer_name']}|{state['feature']}".lower()
+
+#     if key in cache:
+#         return {
+#             "cache_hit": True,
+#             "cache_key": key,
+#             "result": cache[key],
+#             "logs": [{
+#                 "step": "cache_hit",
+#                 "type": "system",
+#                 "time_sec": time.time() - start
+#             }]
+#         }
+
+#     return {
+#         "cache_hit": False,
+#         "cache_key": key,
+#         "logs": [{
+#             "step": "cache_miss",
+#             "type": "system",
+#             "time_sec": time.time() - start
+#         }]
+#     }
+
 def check_cache(state: State):
     start = time.time()
+
+    mode = state.get("cache_mode", "Use Cache")
+
+    # 🚫 IGNORE CACHE
+    if mode == "Ignore Cache":
+        return {
+            "cache_hit": False,
+            "cache_key": "",
+            "logs": [{
+                "step": "cache_ignored",
+                "type": "system",
+                "time_sec": time.time() - start
+            }]
+        }
+
     cache = load_cache()
     key = f"{state['offer_name']}|{state['feature']}".lower()
 
+    # 🔄 REFRESH CACHE
+    if mode == "Refresh Cache":
+        return {
+            "cache_hit": False,
+            "cache_key": key,
+            "logs": [{
+                "step": "cache_refresh",
+                "type": "system",
+                "time_sec": time.time() - start
+            }]
+        }
+
+    # ✅ USE CACHE
     if key in cache:
         return {
             "cache_hit": True,
@@ -127,12 +213,17 @@ def query_planner(state: State):
     start = time.time()
 
     prompt = f"""
-    Return JSON:
-    {{
-      "pro": ["query1"],
-      "anti": ["query1"]
-    }}
+    # Return JSON:
+    # {{
+    #   "pro": ["query1"],
+    #   "anti": ["query1"]
+    # }}
+    Return ONLY JSON.
 
+    {{
+        "pro": ["query1", "query2"],
+        "anti": ["query1", "query2"]
+    }}
     Offer: {state['offer_name']}
     Feature: {state['feature']}
     """
@@ -212,43 +303,19 @@ def scraper(state: State):
     }
 
 
-# def verifier(state: State):
-#     start = time.time()
 
-#     prompt = f"""
-#     Return JSON:
-#     {{
-#       "summary": "..."
-#     }}
-
-#     PRO: {state['pro_docs']}
-#     ANTI: {state['anti_docs']}
-#     """
-
-#     res = call_llm(prompt)
-#     parsed = safe_json_parse(res)
-
-#     cache = load_cache()
-#     cache[state["cache_key"]] = parsed
-#     save_cache(cache)
-
-#     return {
-#         "result": parsed,
-#         "logs": [{
-#             "step": "verifier",
-#             "type": "sequential",
-#             "time_sec": time.time() - start
-#         }]
-#     }
 def verifier(state: State):
     start = time.time()
 
     prompt = f"""
 You are a product strategy analyst.
 
-Based on the evidence below, evaluate whether the feature should be included in the offer.
+Evaluate whether a feature should be included in an offer.
 
-Return STRICT JSON:
+Return ONLY a JSON object.
+No markdown.
+No explanation.
+No extra text:
 
 {{
   "pro_confidence": number (0-100),
@@ -261,6 +328,12 @@ Return STRICT JSON:
   "summary": "final explanation"
 }}
 
+Scoring guidance:
+- Strong pros, weak cons → Always
+- Balanced → Limited
+- Niche → Add-on
+- Strong cons → Never
+
 Offer: {state['offer_name']}
 Vendor: {state['vendor_name']}
 Feature: {state['feature']}
@@ -272,10 +345,26 @@ ANTI EVIDENCE:
 {state['anti_docs']}
 """
 
-    res = call_llm(prompt)
-    parsed = safe_json_parse(res)
+    full_text = ""
 
-    # 🛡️ Fallback safety (very important)
+    # =========================
+    # 🔥 STREAM TOKENS
+    # =========================
+    for token in call_llm_stream(prompt):
+        full_text += token
+
+        yield {
+            "stream_token": token.replace("\n", " ")
+        }
+
+    # =========================
+    # 🧠 PARSE FINAL OUTPUT
+    # =========================
+    parsed = safe_json_parse(full_text)
+
+    # =========================
+    # 🛡️ FALLBACK SAFETY
+    # =========================
     parsed.setdefault("pro_confidence", 0)
     parsed.setdefault("anti_confidence", 0)
     parsed.setdefault("composite_score", 0)
@@ -285,12 +374,21 @@ ANTI EVIDENCE:
     parsed.setdefault("risks", [])
     parsed.setdefault("summary", "No summary generated")
 
-    # 💾 Save to cache
-    cache = load_cache()
-    cache[state["cache_key"]] = parsed
-    save_cache(cache)
+    # =========================
+    # 💾 CACHE SAVE
+    # =========================
+    # cache = load_cache()
+    # cache[state["cache_key"]] = parsed
+    # save_cache(cache)
+    if state.get("cache_mode") != "Ignore Cache":
+        cache = load_cache()
+        cache[state["cache_key"]] = parsed
+        save_cache(cache)
 
-    return {
+    # =========================
+    # ✅ FINAL OUTPUT (MANDATORY YIELD)
+    # =========================
+    yield {
         "result": parsed,
         "logs": [{
             "step": "verifier",
@@ -330,5 +428,8 @@ builder.add_edge("verifier", END)
 graph = builder.compile()
 
 
-def run_graph(input_state):
-    return graph.invoke(input_state)
+
+def stream_graph(input_state):
+    for event in graph.stream(input_state):
+        if event:   #  prevents NoneType error
+            yield event
