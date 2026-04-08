@@ -1,7 +1,12 @@
 from langgraph.graph import StateGraph,START,END,add_messages
 from typing import TypedDict,Annotated
 from langchain_core.messages import BaseMessage,HumanMessage
-from langchain_community.chat_models import ChatOllama
+
+# from langchain_community.chat_models import ChatOllama
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+import os
+
 from dotenv import load_dotenv
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.message import add_messages
@@ -15,7 +20,11 @@ import random #
 
 load_dotenv()
 
-llm= ChatOllama(model="llama3")
+llm = ChatGroq(
+    groq_api_key=os.getenv("GROQ_API_KEY"),
+    model_name="llama-3.3-70b-versatile",
+    streaming=True
+)
 
 #tools 
 search_tool=DuckDuckGoSearchRun(region="us-en")
